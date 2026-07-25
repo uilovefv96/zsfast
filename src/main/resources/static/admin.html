@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <!-- 站点图标 -->
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <meta charset="UTF-8">
+    <!-- 禁止浏览器缓存页面（开发调试用） -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>物流后台管理系统</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.6.3/dist/index.css">
+    <style>
+        /* 页面整体布局样式 */
+        body { margin: 0; background: #f4f4f4; font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', sans-serif; }
+        .admin-container { padding: 20px; max-width: 1400px; margin: 0 auto; }
+        .main-card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); }
+        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .track-row { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+
+<!--
+  管理后台 Vue 应用根节点
+  功能：订单列表展示、搜索、新增/编辑订单、轨迹管理（增删改）
+-->
+<div id="app">
+    <div class="admin-container">
+        <div class="main-card">
+            <!-- ========== 工具栏（搜索 + 新增按钮） ========== -->
+            <div class="toolbar">
+                <div style="display: flex; gap: 10px;">
+                    <!-- 搜索框：双向绑定 listKeyword，回车触发查询 -->
+                    <el-input v-model="listKeyword" placeholder="搜索单号或收件人" style="width: 300px;" clearable @keyup.enter="fetchOrderList(1)"></el-input>
+                    <el-button type="primary" @click="fetchOrderList(1)">查询</el-button>
+                </div>
+                <el-button type="primary" @click="openAddOrderDialog">+ 新增订单</el-button>
+            </div>
+
+            <!-- ========== 主表格（订单列表） ==========
+                 使用 v-for 动态生成列，避免传统写法导致的列错位问题
+                 :data="tableData"  -> 绑定表格数据
+                 v-loading="tableLoading"  -> 加载动画
+                 row-key="id"  -> 唯一标识，用于内部优化
+            -->
+            <el-table
+                    :data="tableData"
+                    border
+                    stripe
+                    style="width: 100%; min-height: 300px;"
+                    v-loading="tableLoading"
+                    row-key="id"
+            >
+                <!--
+                  动态列：遍历 tableColumns 数组，生成 el-table-column
+                  :key="col.prop"  -> 稳定唯一标识，防止列复用混乱
+                  :prop="col.prop"  -> 绑定数据字段名
+                  :label="col.label"  -> 列标题
+                  :width="col.width"  -> 列宽
+                -->
+                <el-table-column
+                        v-for="col in tableColumns"
+                        :key="col.prop"
+                        :prop="col.prop"
+                        :label="col.label"
+                        :width="col.width"
+                >
+                    <!--
+                      如果当前列是状态列（col.slot === 'status'），则使用自定义插槽渲染标签
+                      #default="{ row }" 是 Vue 的插槽语法，row 为当前行数据
+                    -->
+                    <template v-if="col.slot === 'status'" #default="{ row }">
+                        <el-tag :type="getStatusType(row.status)">{{ row.status }}</el-tag>
+                    </template>
+                </el-table-column>
+
+                <!-- 操作列（固定，不绑定数据字段） -->
+                <el-table-column label="操作" width="200" key="actions">
+                    <template #default="{ row }">
+                        <el-button type="primary" link size="small" @click="openEditOrderDialog(row)">编辑</el-button>
+                        <el-button type="success" link size="small" @click="openTrackDialog(row)">轨迹管理</el-button>
+                    </template>
+                </el-table-column>
+            </el-table>
+
+            <!-- ========== 分页组件 ========== -->
+            <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
+                <el-pagination
+                        v-model:current-page="pageNum"          // 当前页（双向绑定）
+                v-model:page-size="pageSize"            // 每页条数（双向绑定）
+                :page-sizes="[10, 20, 50]"
+                :total="total"
+                layout="total, sizes, prev, pager, next, jumper"
+                @size-change="fetchOrderList"           // 改变每页条数时触发
+                @current-change="fetchOrderList"        // 切换页码时触发
+                />
+            </div>
+        </div>
+    </div>
+
+    <!-- ========== 新增/编辑订单弹窗 ========== -->
+    <el-dialog v-model="orderDialogVisible" :title="isEditOrder ? '编辑订单' : '新增订单'" width="600px">
+        <!--
+          el-form 表单，:model="orderForm" 绑定表单数据，:rules="orderRules" 校验规则
+          ref="orderFormRef"  -> 用于获取表单实例，方便进行整体校验
+        -->
+        <el-form :model="orderForm" label-width="100px" :rules="orderRules" ref="orderFormRef">
+            <el-row :gutter="20">   <!-- 栅格布局，每行两列 -->
+                <el-col :span="12">
+                    <el-form-item label="客户单号" prop="orderNo">
+                        <el-input v-model="orderForm.orderNo" placeholder="如: HZD2026070622" :disabled="isEditOrder"></el-input>
+                    </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                    <el-form-item label="跟踪单号" prop="trackingNo">
+                        <el-input v-model="orderForm.trackingNo" placeholder="如: 1Z0JH..."></el-input>
+                    </el-form-item>
+                </el-col>
+            </el-row>
+            <el-row :gutter="20">
+                <el-col :span="12">
+                    <el-form-item label="状态" prop="status">
+                        <el-select v-model="orderForm.status" placeholder="选择状态" style="width:100%">
+                            <el-option label="等待开船" value="等待开船"></el-option>
+                            <el-option label="运输中" value="运输中"></el-option>
+                            <el-option label="已签收" value="已签收"></el-option>
+                        </el-select>
+                    </el-form-item>
+                </el-col>
+                <el-col :span="12"><el-form-item label="目的国家"><el-input v-model="orderForm.destinationCountry"></el-input></el-form-item></el-col>
+            </el-row>
+            <el-row :gutter="20">
+                <el-col :span="12"><el-form-item label="预计时效"><el-input-number v-model="orderForm.transitDays" :min="1" style="width:100%"></el-input-number></el-form-item></el-col>
+                <el-col :span="12"><el-form-item label="收件人"><el-input v-model="orderForm.receiverName"></el-input></el-form-item></el-col>
+            </el-row>
+            <el-row :gutter="20">
+                <el-col :span="12"><el-form-item label="邮编"><el-input v-model="orderForm.receiverZip"></el-input></el-form-item></el-col>
+            </el-row>
+        </el-form>
+        <template #footer>
+            <el-button @click="orderDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="submitOrder" :loading="orderLoading">确认保存</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- ========== 轨迹管理弹窗 ========== -->
+    <el-dialog v-model="trackDialogVisible" title="轨迹管理" width="900px">
+        <div style="margin-bottom: 10px; font-size: 14px; color: #606266;">当前单号：<b>{{ currentOrderNo }}</b></div>
+
+        <!-- 已有轨迹列表（可编辑） -->
+        <el-table :data="trackList" :key="trackTableKey" border stripe style="width: 100%; margin-bottom: 15px;" max-height="250">
+            <!-- 时间列：使用日期选择器编辑 -->
+            <el-table-column prop="trackTime" label="发生时间" width="180">
+                <template #default="{ row }">
+                    <el-date-picker v-model="row.trackTime" type="datetime" size="small" style="width: 100%;"></el-date-picker>
+                </template>
+            </el-table-column>
+            <!-- 地点列 -->
+            <el-table-column prop="location" label="地点" width="150">
+                <template #default="{ row }"><el-input v-model="row.location" size="small"></el-input></template>
+            </el-table-column>
+            <!-- 轨迹内容 -->
+            <el-table-column prop="description" label="轨迹内容">
+                <template #default="{ row }"><el-input v-model="row.description" size="small"></el-input></template>
+            </el-table-column>
+            <!-- 删除按钮 -->
+            <el-table-column label="操作" width="80">
+                <template #default="{ $index }">
+                    <el-button type="danger" link size="small" @click="trackList.splice($index, 1)">删除</el-button>
+                </template>
+            </el-table-column>
+        </el-table>
+
+        <!-- 批量新增轨迹区域 -->
+        <div style="border-top: 1px dashed #ddd; padding-top: 15px;">
+            <div style="margin-bottom: 10px; font-weight: bold; color: #409eff;">批量新增轨迹</div>
+            <!-- v-for 遍历 newTracks 数组，每行一条新轨迹输入 -->
+            <div v-for="(track, index) in newTracks" :key="'new-' + index" class="track-row">
+                <el-date-picker v-model="track.trackTime" type="datetime" placeholder="发生时间" style="width: 200px;" size="default"></el-date-picker>
+                <el-input v-model="track.location" placeholder="地点" style="width: 150px;" size="default"></el-input>
+                <el-input v-model="track.description" placeholder="轨迹内容" style="width: 300px;" size="default"></el-input>
+                <!-- 删除新增行（至少保留一行） -->
+                <el-button type="danger" size="small" @click="newTracks.splice(index, 1)" :disabled="newTracks.length <= 1">- 删除</el-button>
+            </div>
+            <el-button type="dashed" @click="addNewTrack">+ 添加一行</el-button>
+        </div>
+
+        <template #footer>
+            <el-button @click="trackDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="saveAllTracks" :loading="trackLoading">一键保存所有变更</el-button>
+        </template>
+    </el-dialog>
+</div>
+
+<!-- 引入 Vue 3 和 Element Plus（必须放在底部） -->
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.6.3/dist/index.full.js"></script>
+<script>
+    const { createApp, ref, onMounted } = Vue;
+
+    createApp({
+        setup() {
+            // ================================================================
+            // 1. 列定义（表格结构）—— 相当于 Java 的枚举或常量配置
+            //    使用数组统一管理列，便于维护顺序和属性，也避免了传统写法列错位的问题
+            // ================================================================
+            const tableColumns = ref([
+                { prop: 'orderNo', label: '客户单号', width: 160 },
+                { prop: 'trackingNo', label: '跟踪单号', width: 180 },
+                { prop: 'status', label: '状态', width: 120, slot: 'status' }, // slot 标记表示该列需要自定义渲染
+                { prop: 'destinationCountry', label: '目的国家', width: 120 },
+                { prop: 'receiverName', label: '收件人', width: 120 },
+                { prop: 'transitDays', label: '时效(天)', width: 100 }
+            ]);
+
+            // ================================================================
+            // 2. 表格数据与分页状态
+            // ================================================================
+            const tableLoading = ref(false);        // 加载状态
+            const tableData = ref([]);              // 当前页数据
+            const pageNum = ref(1);                 // 当前页码
+            const pageSize = ref(10);               // 每页条数
+            const total = ref(0);                   // 总记录数
+            const listKeyword = ref('');            // 搜索关键词
+
+            // ================================================================
+            // 3. 工具函数
+            // ================================================================
+            // 根据状态返回标签颜色
+            const getStatusType = (status) => {
+                switch(status) {
+                    case '已签收': return 'success';
+                    case '运输中': return 'info';
+                    default: return 'warning';      // 等待开船等
+                }
+            };
+
+            // ================================================================
+            // 4. 核心：获取订单列表（分页+搜索）
+            //    相当于调用 GET /api/logistics/orders 接口
+            // ================================================================
+            const fetchOrderList = async (page = 1) => {
+                if (page !== 1) pageNum.value = page;
+                tableLoading.value = true;
+                tableData.value = [];
+                total.value = 0;
+                try {
+                    const res = await fetch(`/api/logistics/orders?pageNum=${pageNum.value}&pageSize=${pageSize.value}&keyword=${listKeyword.value}`);
+                    const result = await res.json();
+                    if (result.code === 200 && result.data && result.data.records) {
+                        tableData.value = result.data.records;
+                        total.value = Number(result.data.total || 0);
+                    }
+                } catch (e) {
+                    console.error('获取列表失败:', e);
+                    ElementPlus.ElMessage.error('获取列表失败');
+                } finally {
+                    tableLoading.value = false;
+                }
+            };
+
+            // ================================================================
+            // 5. 新增/编辑订单弹窗相关
+            // ================================================================
+            const orderDialogVisible = ref(false);
+            const isEditOrder = ref(false);          // true=编辑模式，false=新增模式
+            const orderLoading = ref(false);
+            const orderFormRef = ref(null);          // 表单实例引用，用于校验
+            const orderForm = ref({
+                orderNo: '',
+                trackingNo: '',
+                status: '',
+                destinationCountry: '',
+                transitDays: 20,
+                receiverName: '',
+                receiverZip: ''
+            });
+            // 表单校验规则（类似于 Java 的 Bean Validation）
+            const orderRules = {
+                orderNo: [{ required: true, message: '客户单号不能为空', trigger: 'blur' }],
+                status: [{ required: true, message: '请选择状态', trigger: 'change' }]
+            };
+
+            // 打开新增对话框（重置表单）
+            const openAddOrderDialog = () => {
+                isEditOrder.value = false;
+                orderForm.value = {
+                    orderNo: '',
+                    trackingNo: '',
+                    status: '',
+                    destinationCountry: '',
+                    transitDays: 20,
+                    receiverName: '',
+                    receiverZip: ''
+                };
+                orderDialogVisible.value = true;
+            };
+
+            // 打开编辑对话框（回显行数据）
+            const openEditOrderDialog = (row) => {
+                isEditOrder.value = true;
+                orderForm.value = { ...row };        // 浅拷贝行数据
+                orderDialogVisible.value = true;
+            };
+
+            // 提交保存（新增或更新）
+            const submitOrder = async () => {
+                if (!orderFormRef.value) return;
+                // 先进行表单校验
+                await orderFormRef.value.validate(async (valid) => {
+                    if (valid) {
+                        orderLoading.value = true;
+                        try {
+                            const res = await fetch('/api/logistics/saveOrder', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(orderForm.value)
+                            });
+                            const data = await res.json();
+                            if (data.code === 200) {
+                                ElementPlus.ElMessage.success(data.msg);
+                                orderDialogVisible.value = false;
+                                fetchOrderList();   // 刷新列表
+                            } else {
+                                ElementPlus.ElMessage.error(data.msg);
+                            }
+                        } catch (e) {
+                            ElementPlus.ElMessage.error('请求异常');
+                        } finally {
+                            orderLoading.value = false;
+                        }
+                    }
+                });
+            };
+
+            // ================================================================
+            // 6. 轨迹管理弹窗相关
+            // ================================================================
+            const trackDialogVisible = ref(false);
+            const trackLoading = ref(false);
+            const currentOrderNo = ref('');           // 当前操作的订单号
+            const trackList = ref([]);                // 已有轨迹列表（可编辑）
+            const newTracks = ref([{ trackTime: '', location: '', description: '' }]); // 新增轨迹临时行
+            const trackTableKey = ref(0);             // 用于强制刷新轨迹表格（当数据变化时递增）
+
+            // 打开轨迹管理弹窗，并加载该订单的轨迹数据
+            const openTrackDialog = async (row) => {
+                currentOrderNo.value = row.orderNo;
+                newTracks.value = [{ trackTime: '', location: '', description: '' }]; // 重置新增行
+                trackDialogVisible.value = true;
+                trackTableKey.value++;                // 改变 key 让表格重新渲染（消除潜在缓存）
+
+                try {
+                    const res = await fetch(`/api/logistics/detail?orderNo=${row.orderNo}`);
+                    const result = await res.json();
+                    if (result.code === 200) {
+                        trackList.value = result.data.tracks ? [...result.data.tracks] : [];
+                    }
+                } catch (e) {
+                    ElementPlus.ElMessage.error('获取轨迹失败');
+                }
+            };
+
+            // 新增一行新的轨迹输入
+            const addNewTrack = () => newTracks.value.push({ trackTime: '', location: '', description: '' });
+
+            // 一键保存所有变更（包括编辑已有轨迹和新增轨迹）
+            const saveAllTracks = async () => {
+                trackLoading.value = true;
+                let successCount = 0;
+                try {
+                    // 1. 保存修改后的已有轨迹（只保存有 id、时间、描述 的）
+                    for (const track of trackList.value) {
+                        if (track.id && track.trackTime && track.description) {
+                            const res = await fetch('/api/logistics/track', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ ...track, orderNo: currentOrderNo.value })
+                            });
+                            const data = await res.json();
+                            if (data.code === 200) successCount++;
+                        }
+                    }
+
+                    // 2. 保存新增的轨迹
+                    for (const track of newTracks.value) {
+                        if (track.trackTime && track.description) {
+                            const res = await fetch('/api/logistics/track', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ ...track, orderNo: currentOrderNo.value })
+                            });
+                            const data = await res.json();
+                            if (data.code === 200) successCount++;
+                        }
+                    }
+
+                    ElementPlus.ElMessage.success(`成功处理 ${successCount} 条轨迹！`);
+                    trackDialogVisible.value = false;
+                } catch (e) {
+                    ElementPlus.ElMessage.error('保存异常');
+                } finally {
+                    trackLoading.value = false;
+                }
+            };
+
+            // ================================================================
+            // 7. 生命周期钩子：组件挂载后自动加载第一页数据
+            //    相当于 Spring 的 @PostConstruct 或 InitializingBean
+            // ================================================================
+            onMounted(() => fetchOrderList());
+
+            // ================================================================
+            // 8. 返回所有需要暴露给模板的变量和方法
+            // ================================================================
+            return {
+                tableColumns,   // 列定义数组
+                tableLoading, tableData, pageNum, pageSize, total, listKeyword,
+                getStatusType, fetchOrderList,
+                orderDialogVisible, isEditOrder, orderLoading, orderFormRef, orderForm, orderRules,
+                openAddOrderDialog, openEditOrderDialog, submitOrder,
+                trackDialogVisible, trackLoading, currentOrderNo, trackList, newTracks, trackTableKey,
+                openTrackDialog, addNewTrack, saveAllTracks
+            };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

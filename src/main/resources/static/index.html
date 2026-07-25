@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <!-- 站点图标（favicon），浏览器标签页上显示的小图标 -->
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>全球物流轨迹查询系统</title>
+    <!-- 1. Element Plus CSS：UI 组件样式库，相当于前端界的 Bootstrap -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.6.3/dist/index.css">
+    <style>
+        /* 基础样式——可以理解为“页面布局的骨架”，不用太纠结具体数值 */
+        body { margin: 0; background: #f0f2f5; font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', sans-serif; }
+        .app-container { display: flex; height: 100vh; padding: 20px; box-sizing: border-box; gap: 20px; }
+
+        /* 左侧面板（搜索+列表） */
+        .left-panel { width: 380px; background: #fff; border-radius: 8px; padding: 20px; display: flex; flex-direction: column; box-shadow: 0 2px 12px rgba(0,0,0,0.05); }
+        .search-box { margin-bottom: 20px; }
+        .order-list { flex: 1; overflow-y: auto; } /* 可滚动列表 */
+        .order-card { padding: 15px; border: 1px solid #ebeef5; border-radius: 6px; margin-bottom: 10px; cursor: pointer; transition: all 0.2s; }
+        .order-card:hover { border-color: #409eff; background: #ecf5ff; }
+        .order-card.active { border-color: #409eff; background: #ecf5ff; box-shadow: 0 2px 8px rgba(64,158,255,0.2); } /* 当前选中高亮 */
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .card-no { font-weight: 600; color: #303133; font-size: 15px; }
+        .card-info { font-size: 13px; color: #909399; line-height: 1.6; }
+        .card-time { font-size: 12px; color: #c0c4cc; margin-top: 8px; text-align: right; }
+
+        /* 右侧面板（详情+轨迹） */
+        .right-panel { flex: 1; background: #fff; border-radius: 8px; padding: 30px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); display: flex; flex-direction: column; }
+        .detail-header { border-bottom: 1px solid #ebeef5; padding-bottom: 20px; margin-bottom: 20px; }
+        .detail-title { font-size: 22px; font-weight: 600; color: #303133; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+        .info-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; } /* 三列网格展示订单信息 */
+        .info-item label { display: block; font-size: 12px; color: #909399; margin-bottom: 4px; }
+        .info-item span { font-size: 14px; color: #303133; font-weight: 500; }
+        .track-table { flex: 1; overflow: hidden; }
+
+        /* 空状态提示（当没有选中订单时显示） */
+        .empty-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #c0c4cc; }
+        .empty-icon { font-size: 60px; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+
+<!--
+  ================================================================
+  Vue 应用根节点：整个页面由 Vue 控制，相当于 Spring Boot 的
+  @SpringBootApplication 启动类，所有模板语法都在 #app 内生效
+  ================================================================
+-->
+<div id="app">
+    <div class="app-container">
+        <!-- ========== 左侧面板：搜索框 + 订单列表 ========== -->
+        <div class="left-panel">
+            <div class="search-box">
+                <!--
+                  el-input：Element Plus 的输入框组件
+                  v-model="searchKey"  -> 双向数据绑定：输入框内容变化时，JS 的 searchKey 变量自动更新；
+                                        反之，JS 修改 searchKey，输入框也会同步显示
+                  @keyup.enter="handleSearch"  -> 按下回车键触发查询方法
+                  size="large"  -> 大号样式
+                  #append 插槽 -> 在输入框尾部追加一个“查询”按钮
+                -->
+                <el-input
+                        v-model="searchKey"
+                        placeholder="输入客户单号查询（支持换行或逗号分隔批量查询）"
+                        clearable
+                        @keyup.enter="handleSearch"
+                        size="large"
+                >
+                    <template #append>
+                        <!-- :icon="Search" 使用图标组件，:loading="loading" 控制按钮加载状态 -->
+                        <el-button :icon="Search" @click="handleSearch" :loading="loading">查询</el-button>
+                    </template>
+                </el-input>
+            </div>
+
+            <!-- 订单列表容器（可滚动） -->
+            <div class="order-list">
+                <!-- 当列表为空且不在加载状态时，显示提示 -->
+                <div v-if="orderList.length === 0 && !loading" style="text-align: center; color: #999; margin-top: 40px;">
+                    暂无数据，请输入单号查询
+                </div>
+                <!--
+                  v-for 循环渲染每一个订单卡片
+                  :key="item.orderNo"  -> 唯一标识，Vue 内部用于高效更新 DOM
+                  class="order-card" :class="{ active: currentOrder?.orderNo === item.orderNo }"
+                    -> 如果当前选中的订单号与当前项相同，则添加 active 类高亮
+                  @click="selectOrder(item)"  -> 点击卡片时调用 selectOrder 方法
+                -->
+                <div
+                        v-for="item in orderList"
+                        :key="item.orderNo"
+                        class="order-card"
+                        :class="{ active: currentOrder?.orderNo === item.orderNo }"
+                        @click="selectOrder(item)"
+                >
+                    <div class="card-header">
+                        <span class="card-no">{{ item.orderNo }}</span>
+                        <!-- el-tag 标签：根据状态显示不同颜色 -->
+                        <el-tag size="small" :type="getStatusType(item.status)">{{ item.status }}</el-tag>
+                    </div>
+                    <div class="card-info">
+                        <div>目的地：{{ item.destinationCountry }}</div>
+                        <div>收件人：{{ item.receiverName }}</div>
+                    </div>
+                    <div class="card-time">更新：{{ formatTime(item.latestUpdateTime) }}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ========== 右侧面板：订单详情 + 轨迹表格 ========== -->
+        <div class="right-panel">
+            <!-- 如果有选中的订单（currentOrder 不为 null），则显示详情和轨迹 -->
+            <template v-if="currentOrder">
+                <div class="detail-header">
+                    <div class="detail-title">
+                        {{ currentOrder.orderNo }}
+                        <!-- effect="dark" 让标签颜色更深 -->
+                        <el-tag :type="getStatusType(currentOrder.status)" effect="dark">{{ currentOrder.status }}</el-tag>
+                    </div>
+                    <!-- 网格展示订单关键字段 -->
+                    <div class="info-grid">
+                        <div class="info-item"><label>跟踪单号</label><span>{{ currentOrder.trackingNo || '-' }}</span></div>
+                        <div class="info-item"><label>目的国家</label><span>{{ currentOrder.destinationCountry }}</span></div>
+                        <div class="info-item"><label>预计时效</label><span>{{ currentOrder.transitDays }} 天</span></div>
+                        <div class="info-item"><label>收件人</label><span>{{ currentOrder.receiverName }}</span></div>
+                        <div class="info-item"><label>邮编</label><span>{{ currentOrder.receiverZip || '-' }}</span></div>
+                        <div class="info-item"><label>创建时间</label><span>{{ formatTime(currentOrder.createTime) }}</span></div>
+                    </div>
+                </div>
+
+                <!--
+                  轨迹列表表格
+                  :data="trackList"  -> 绑定轨迹数组
+                  border stripe  -> 带边框和隔行变色
+                  max-height="250"  -> 限定高度，超出滚动
+                -->
+                <el-table
+                        :data="trackList"
+                        border
+                        stripe
+                        style="width: 100%; margin-bottom: 15px;"
+                        max-height="250">
+                    <!-- 时间列：固定宽度 180px -->
+                    <el-table-column prop="trackTime" label="轨迹时间" width="180" align="center">
+                        <template #default="{ row }">
+                            {{ row.trackTime }}
+                        </template>
+                    </el-table-column>
+                    <!-- 地点列：固定宽度 150px，show-overflow-tooltip 表示内容过长时显示悬浮提示 -->
+                    <el-table-column prop="location" label="地点" width="150" show-overflow-tooltip>
+                        <template #default="{ row }">
+                            {{ row.location }}
+                        </template>
+                    </el-table-column>
+                    <!-- 详情列：不设固定宽度，自动填满剩余空间（min-width 保证最小宽度） -->
+                    <el-table-column prop="description" label="轨迹详情" min-width="200">
+                        <template #default="{ row }">
+                            {{ row.description }}
+                        </template>
+                    </el-table-column>
+                </el-table>
+            </template>
+            <!-- 如果没有选中的订单，显示空状态 -->
+            <div v-else class="empty-state">
+                <div class="empty-icon">📦</div>
+                <div>请在左侧输入单号或选择订单查看详情</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 2. 引入 Vue 3 和 Element Plus 的 JavaScript 库（必须放在 body 底部，保证页面元素先加载） -->
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.6.3/dist/index.full.js"></script>
+<!-- Element Plus 图标库（单独引入） -->
+<script src="https://unpkg.com/@element-plus/icons-vue"></script>
+
+<script>
+    // 从 Vue 全局对象中解构出 createApp, ref, nextTick 等 API
+    const { createApp, ref, nextTick } = Vue;
+
+    // 创建 Vue 应用实例，相当于 Spring 的 ApplicationContext
+    const app = createApp({
+        // setup() 是组合式 API 的入口，类似于 Java 类的构造函数，所有响应式数据和逻辑都在这里定义
+        setup() {
+            // ========== 1. 定义响应式数据 ==========
+            // ref() 创建一个响应式引用，相当于 Spring 中的 @Value 但可变化；.value 访问其值
+            const searchKey = ref('');              // 搜索框输入的文本
+            const loading = ref(false);             // 查询加载状态（控制按钮动画和提示）
+            const orderList = ref([]);              // 左侧订单列表数据（数组）
+            const currentOrder = ref(null);         // 当前选中的订单对象（或 null）
+            const trackList = ref([]);              // 当前订单的轨迹列表（数组）
+            const Search = ElementPlusIconsVue.Search; // 搜索图标组件
+
+            // ========== 2. 辅助函数（工具方法） ==========
+            // 格式化时间：将 "2025-01-01T12:00:00" 转为 "2025-01-01 12:00:00"
+            const formatTime = (timeStr) => {
+                if (!timeStr) return '-';
+                return timeStr.replace('T', ' ').substring(0, 19);
+            };
+
+            // 根据订单状态返回 Element Plus 标签类型（颜色）——对应 Java 的枚举映射
+            const getStatusType = (status) => {
+                if (status === '已签收') return 'success';
+                if (status === '运输中') return '';       // 空字符串表示默认蓝色
+                if (status === '等待开船') return 'warning';
+                return 'info';                           // 其他情况灰色
+            };
+
+            // ========== 3. 核心业务方法 ==========
+            /**
+             * 加载某个订单的详细信息（包括轨迹）
+             * 相当于调用后端接口：GET /api/logistics/detail?orderNo=xxx
+             * 成功后更新 currentOrder 和 trackList，并将该订单添加到左侧列表（若不存在）
+             */
+            const loadOrderDetail = async (orderNo) => {
+                try {
+                    const res = await fetch(`/api/logistics/detail?orderNo=${orderNo}`);
+                    const result = await res.json();
+                    if (result.code === 200 && result.data) {
+                        const { order, tracks } = result.data;
+                        currentOrder.value = order;
+                        trackList.value = tracks || [];
+
+                        // 去重：如果左侧列表中还没有这个订单，则插入到最前面
+                        const exists = orderList.value.find(o => o.orderNo === order.orderNo);
+                        if (!exists) orderList.value.unshift(order);
+                    } else {
+                        ElementPlus.ElMessage.warning(result.msg || '未找到该单号信息');
+                    }
+                } catch (e) {
+                    ElementPlus.ElMessage.error('网络异常，请检查后端接口');
+                }
+            };
+
+            /**
+             * 查询（支持批量）：
+             * 将搜索框内容按换行或逗号拆分，逐个调用 loadOrderDetail
+             */
+            const handleSearch = async () => {
+                const key = searchKey.value.trim();
+                if (!key) return;
+
+                loading.value = true;
+                // 用正则拆分：换行符(\n)或逗号(,)，过滤空字符串
+                const orderNos = key.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+
+                try {
+                    for (const no of orderNos) {
+                        await loadOrderDetail(no);
+                    }
+                    // 查询完成后，将搜索框的值回填为第一个单号（方便再次查询）
+                    await nextTick();   // 等待 DOM 更新后再赋值
+                    searchKey.value = orderNos[0];
+                } finally {
+                    loading.value = false;
+                }
+            };
+
+            /**
+             * 点击左侧订单卡片时触发：
+             * 如果已选中同一个订单则忽略，否则加载详情并将搜索框同步为当前单号
+             */
+            const selectOrder = async (order) => {
+                if (currentOrder.value && currentOrder.value.orderNo === order.orderNo) return;
+                await loadOrderDetail(order.orderNo);
+                await nextTick();
+                searchKey.value = order.orderNo;
+            };
+
+            // ========== 4. 返回所有需要在模板中使用的数据和方法 ==========
+            // 相当于 Spring MVC 的 ModelAndView 返回数据给前端
+            return {
+                searchKey, loading, orderList, currentOrder, trackList,
+                Search, formatTime, getStatusType, handleSearch, selectOrder
+            };
+        }
+    });
+
+    // 使用 Element Plus 插件
+    app.use(ElementPlus);
+    // 注册所有 Element Plus 图标组件（使 <el-icon><Search /></el-icon> 等可用）
+    for (const [key, component] of Object.entries(ElementPlusIconsVue)) {
+        app.component(key, component);
+    }
+    // 将 Vue 应用挂载到 #app 元素上，启动应用
+    app.mount('#app');
+</script>
+</body>
+</html>
