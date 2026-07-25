@@ -39,37 +39,6 @@ public class LogisticsController {
         return Result.success(data);
     }
 
-    @PostMapping("/saveOrder")
-    @Operation(summary = "新增或更新物流订单", description = "如果单号已存在则更新基础信息，不存在则新增")
-    public Result<String> saveOrder(@RequestBody LogisticsOrder order) {
-        try {
-            logisticsService.saveOrUpdateOrder(order);
-            return Result.success("订单保存成功");
-        } catch (Exception e) {
-            return Result.error("订单保存失败: " + e.getMessage());
-        }
-    }
-
-    @PostMapping("/track")
-    @Operation(summary = "新增物流轨迹", description = "为指定的客户单号添加一条新的轨迹明细")
-    public Result<String> saveTrack(@RequestBody LogisticsTrack track) {
-        try {
-            logisticsService.saveOrUpdateTrack(track);
-            return Result.success("轨迹添加成功");
-        } catch (Exception e) {
-            return Result.error("轨迹添加失败: " + e.getMessage());
-        }
-    }
-
-    @GetMapping("/orders")
-    @Operation(summary = "分页查询订单列表")
-    public Result<Page<LogisticsOrder>> pageOrders(
-            @Parameter(description = "页码", example = "1") @RequestParam(defaultValue = "1") int pageNum,
-            @Parameter(description = "每页条数", example = "10") @RequestParam(defaultValue = "10") int pageSize,
-            @Parameter(description = "搜索关键字") @RequestParam(required = false) String keyword) {
-        Page<LogisticsOrder> page = logisticsService.pageOrders(pageNum, pageSize, keyword);
-        return Result.success(page);
-    }
 
 
 

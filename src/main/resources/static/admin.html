@@ -39,9 +39,6 @@
 
             <!-- ========== 主表格（订单列表） ==========
                  使用 v-for 动态生成列，避免传统写法导致的列错位问题
-                 :data="tableData"  -> 绑定表格数据
-                 v-loading="tableLoading"  -> 加载动画
-                 row-key="id"  -> 唯一标识，用于内部优化
             -->
             <el-table
                     :data="tableData"
@@ -51,28 +48,23 @@
                     v-loading="tableLoading"
                     row-key="id"
             >
-                <!--
-                  动态列：遍历 tableColumns 数组，生成 el-table-column
-                  :key="col.prop"  -> 稳定唯一标识，防止列复用混乱
-                  :prop="col.prop"  -> 绑定数据字段名
-                  :label="col.label"  -> 列标题
-                  :width="col.width"  -> 列宽
-                -->
+
                 <el-table-column
                         v-for="col in tableColumns"
-                        :key="col.prop"
+                        :key="col.prop || col.type"
+                        :type="col.type"
                         :prop="col.prop"
                         :label="col.label"
                         :width="col.width"
                 >
-                    <!--
-                      如果当前列是状态列（col.slot === 'status'），则使用自定义插槽渲染标签
-                      #default="{ row }" 是 Vue 的插槽语法，row 为当前行数据
-                    -->
+
+                <!--  如果当前列是状态列（col.slot === 'status'），则使用自定义插槽渲染标签-->
+                <!--  #default="{ row }" 是 Vue 的插槽语法，row 为当前行数据-->
                     <template v-if="col.slot === 'status'" #default="{ row }">
                         <el-tag :type="getStatusType(row.status)">{{ row.status }}</el-tag>
                     </template>
                 </el-table-column>
+
 
                 <!-- 操作列（固定，不绑定数据字段） -->
                 <el-table-column label="操作" width="200" key="actions">
@@ -86,13 +78,13 @@
             <!-- ========== 分页组件 ========== -->
             <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
                 <el-pagination
-                        v-model:current-page="pageNum"          // 当前页（双向绑定）
-                v-model:page-size="pageSize"            // 每页条数（双向绑定）
+                        v-model:current-page="pageNum"
+                v-model:page-size="pageSize"
                 :page-sizes="[10, 20, 50]"
                 :total="total"
                 layout="total, sizes, prev, pager, next, jumper"
-                @size-change="fetchOrderList"           // 改变每页条数时触发
-                @current-change="fetchOrderList"        // 切换页码时触发
+                @size-change="fetchOrderList"
+                @current-change="fetchOrderList"
                 />
             </div>
         </div>
@@ -205,12 +197,14 @@
             //    使用数组统一管理列，便于维护顺序和属性，也避免了传统写法列错位的问题
             // ================================================================
             const tableColumns = ref([
+                { type: 'index', label: '序号', width: 60 }, // 新增序号列
                 { prop: 'orderNo', label: '客户单号', width: 160 },
                 { prop: 'trackingNo', label: '跟踪单号', width: 180 },
                 { prop: 'status', label: '状态', width: 120, slot: 'status' }, // slot 标记表示该列需要自定义渲染
                 { prop: 'destinationCountry', label: '目的国家', width: 120 },
                 { prop: 'receiverName', label: '收件人', width: 120 },
-                { prop: 'transitDays', label: '时效(天)', width: 100 }
+                { prop: 'transitDays', label: '时效(天)', width: 100 },
+                { prop: 'createTime', label: '创建时间', width: 180 }
             ]);
 
             // ================================================================
@@ -237,7 +231,7 @@
 
             // ================================================================
             // 4. 核心：获取订单列表（分页+搜索）
-            //    相当于调用 GET /api/logistics/orders 接口
+            //    相当于调用 GET /api/admin/orders 接口
             // ================================================================
             const fetchOrderList = async (page = 1) => {
                 if (page !== 1) pageNum.value = page;
@@ -245,7 +239,7 @@
                 tableData.value = [];
                 total.value = 0;
                 try {
-                    const res = await fetch(`/api/logistics/orders?pageNum=${pageNum.value}&pageSize=${pageSize.value}&keyword=${listKeyword.value}`);
+                    const res = await fetch(`/api/admin/orders?pageNum=${pageNum.value}&pageSize=${pageSize.value}&keyword=${listKeyword.value}`);
                     const result = await res.json();
                     if (result.code === 200 && result.data && result.data.records) {
                         tableData.value = result.data.records;
@@ -311,7 +305,7 @@
                     if (valid) {
                         orderLoading.value = true;
                         try {
-                            const res = await fetch('/api/logistics/saveOrder', {
+                            const res = await fetch('/api/admin/saveOrder', {
                                 method: 'POST',
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify(orderForm.value)
@@ -372,7 +366,7 @@
                     // 1. 保存修改后的已有轨迹（只保存有 id、时间、描述 的）
                     for (const track of trackList.value) {
                         if (track.id && track.trackTime && track.description) {
-                            const res = await fetch('/api/logistics/track', {
+                            const res = await fetch('/api/admin/track', {
                                 method: 'POST',
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({ ...track, orderNo: currentOrderNo.value })
@@ -385,7 +379,7 @@
                     // 2. 保存新增的轨迹
                     for (const track of newTracks.value) {
                         if (track.trackTime && track.description) {
-                            const res = await fetch('/api/logistics/track', {
+                            const res = await fetch('/api/admin/track', {
                                 method: 'POST',
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify({ ...track, orderNo: currentOrderNo.value })
